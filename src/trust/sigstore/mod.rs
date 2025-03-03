@@ -37,6 +37,7 @@ mod constants;
 
 use crate::errors::{Result, SigstoreError};
 pub use crate::trust::{ManualTrustRoot, TrustRoot};
+use std::str;
 
 /// Securely fetches Rekor public key and Fulcio certificates from Sigstore's TUF repository.
 #[derive(Debug)]
@@ -178,8 +179,70 @@ impl SigstoreTrustRoot {
         std::fs::write(file_path, json).map_err(SigstoreError::from)
     }
 
+    // SECURESIGN-2010
+    pub fn is_corrupted_raw_bytes(raw_bytes: &[u8]) -> bool {
+        if let Ok(text) = str::from_utf8(raw_bytes) {
+            if text.contains("-----BEGIN") {
+                return true;
+            }
+        }
+        false
+    }
+
     // Set a target in the TrustedRoot: Add or Update
     pub fn set_target(&mut self, new_target: TargetType, target_name: Target) -> Result<()> {
+
+        // Step 1: Remove all corrupted targets of the given type
+        match target_name {
+            Target::CertificateAuthority => {
+                self.trusted_root.certificate_authorities.retain(|ca| {
+                    ca.cert_chain.as_ref().map_or(true, |chain| {
+                        let clean_certs: Vec<_> = chain.certificates.iter()
+                            .filter(|cert| {
+                                let corrupted = SigstoreTrustRoot::is_corrupted_raw_bytes(&cert.raw_bytes);
+                                !corrupted
+                            })
+                            .cloned()
+                            .collect();
+    
+                        !clean_certs.is_empty()
+                    })
+                });
+            }
+            Target::TimestampAuthority => {
+                self.trusted_root.timestamp_authorities.retain(|tsa| {
+                    tsa.cert_chain.as_ref().map_or(true, |chain| {
+                        let clean_certs: Vec<_> = chain.certificates.iter()
+                            .filter(|cert| {
+                                let corrupted = SigstoreTrustRoot::is_corrupted_raw_bytes(&cert.raw_bytes);
+                                !corrupted
+                            })
+                            .cloned()
+                            .collect();
+    
+                        !clean_certs.is_empty()
+                    })
+                });
+            }
+            Target::Ctlog => {
+                self.trusted_root.ctlogs.retain(|ctlog| {
+                    let corrupted = ctlog.public_key.as_ref().map_or(false, |key| {
+                        key.raw_bytes.as_ref().map_or(false, |rb| SigstoreTrustRoot::is_corrupted_raw_bytes(rb))
+                    });
+                    !corrupted
+                });
+            }
+            Target::Tlog => {
+                self.trusted_root.tlogs.retain(|tlog| {
+                    let corrupted = tlog.public_key.as_ref().map_or(false, |key| {
+                        key.raw_bytes.as_ref().map_or(false, |rb| SigstoreTrustRoot::is_corrupted_raw_bytes(rb))
+                    });
+                    !corrupted
+                });
+            }
+        }
+
+        // Step 2: Proceed with normal setup after cleanup
         match target_name {
             Target::CertificateAuthority => {
                 if let TargetType::Authority(mut ca) = new_target {
@@ -390,6 +453,58 @@ impl SigstoreTrustRoot {
     // Delete a target from the TrustedRoot by its identifier raw bytes:
     // public key for tlogs and ctlogs, cert chain for certificate and timestamp authorities)
     pub fn delete_target(&mut self, target_type: &Target, identifier: &Vec<u8>) -> Result<()> {
+
+        // Step 1: Remove all corrupted targets of the given type
+        match target_type {
+            Target::CertificateAuthority => {
+                self.trusted_root.certificate_authorities.retain(|ca| {
+                    ca.cert_chain.as_ref().map_or(true, |chain| {
+                        let clean_certs: Vec<_> = chain.certificates.iter()
+                            .filter(|cert| {
+                                let corrupted = SigstoreTrustRoot::is_corrupted_raw_bytes(&cert.raw_bytes);
+                                !corrupted
+                            })
+                            .cloned()
+                            .collect();
+    
+                        !clean_certs.is_empty()
+                    })
+                });
+            }
+            Target::TimestampAuthority => {
+                self.trusted_root.timestamp_authorities.retain(|tsa| {
+                    tsa.cert_chain.as_ref().map_or(true, |chain| {
+                        let clean_certs: Vec<_> = chain.certificates.iter()
+                            .filter(|cert| {
+                                let corrupted = SigstoreTrustRoot::is_corrupted_raw_bytes(&cert.raw_bytes);
+                                !corrupted
+                            })
+                            .cloned()
+                            .collect();
+    
+                        !clean_certs.is_empty()
+                    })
+                });
+            }
+            Target::Ctlog => {
+                self.trusted_root.ctlogs.retain(|ctlog| {
+                    let corrupted = ctlog.public_key.as_ref().map_or(false, |key| {
+                        key.raw_bytes.as_ref().map_or(false, |rb| SigstoreTrustRoot::is_corrupted_raw_bytes(rb))
+                    });
+                    !corrupted
+                });
+            }
+            Target::Tlog => {
+                self.trusted_root.tlogs.retain(|tlog| {
+                    let corrupted = tlog.public_key.as_ref().map_or(false, |key| {
+                        key.raw_bytes.as_ref().map_or(false, |rb| SigstoreTrustRoot::is_corrupted_raw_bytes(rb))
+                    });
+                    !corrupted
+                });
+            }
+        }
+    
+        // Step 2: Proceed with normal deletion after cleanup
         match target_type {
             Target::CertificateAuthority => {
                 self.trusted_root.certificate_authorities.retain(|ca| {
